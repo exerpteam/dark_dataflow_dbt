@@ -1,0 +1,19 @@
+select
+    center,
+    id,
+    ar_type,
+    employeecenter,
+    employeeid,
+    customercenter,
+    customerid,
+    debit_max,
+    asset_accountcenter,
+    asset_accountid,
+    external_id,
+    balance,
+    last_entry_time,
+    last_trans_time,
+    state,
+    collected_until,
+    last_modified
+from {{ source('postgres', 'account_receivables') }}
