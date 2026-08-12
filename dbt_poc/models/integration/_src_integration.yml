@@ -16,3 +16,4 @@ sources:
       - name: subscription_sales
       - name: subscriptions
       - name: masterproductregister
+      - name: state_change_log

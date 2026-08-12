@@ -2,8 +2,7 @@
     config(
         materialized='incremental',
         incremental_strategy='delete+insert',
-        unique_key=['personcenter', 'personid','name'],
-        full_refresh=false
+        unique_key=['personcenter', 'personid','name']
     )
 }}
 
