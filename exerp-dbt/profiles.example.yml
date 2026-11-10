@@ -1,0 +1,12 @@
+dataflow:
+  target: dev
+  outputs:
+    dev:
+      type: redshift
+      host: "{{ env_var('EXERP_DBT_HOST') }}"
+      port: "{{ env_var('EXERP_DBT_PORT', '5439') | int }}"
+      user: "{{ env_var('EXERP_DBT_USER') }}"
+      password: "{{ env_var('EXERP_DBT_PASSWORD') }}"
+      dbname: "{{ env_var('EXERP_DBT_DATABASE', 'exerp') }}"
+      schema: "{{ env_var('EXERP_DBT_SCHEMA', 'exerp') }}"
+      threads: 4
