@@ -1,0 +1,104 @@
+name: Publish Dataflow release
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment:
+        description: Deployment environment name
+        required: true
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - deployments/*.json
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.deployments.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select deployments
+        id: deployments
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+          REQUESTED_DEPLOYMENT: ${{ inputs.deployment }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            configs=("deployments/${REQUESTED_DEPLOYMENT}.json")
+          elif [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+            mapfile -t configs < <(git ls-tree -r --name-only "$CURRENT_SHA" -- 'deployments/*.json')
+          else
+            mapfile -t configs < <(git diff --name-only --diff-filter=ACMR "$BEFORE_SHA" "$CURRENT_SHA" -- 'deployments/*.json')
+          fi
+          ((${#configs[@]})) || { echo 'No deployment configurations selected'; exit 1; }
+          matrix_output=$(python scripts/deployment_matrix.py "${configs[@]}")
+          matrix=${matrix_output#matrix=}
+          mapfile -t environments < <(jq -r '.include[].environment' <<< "$matrix")
+          for environment in "${environments[@]}"; do
+            gh api --silent "repos/$GITHUB_REPOSITORY/environments/$environment" || {
+              echo "GitHub Environment does not exist: $environment"
+              exit 1
+            }
+          done
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: discover
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    concurrency:
+      group: dataflow-${{ matrix.environment }}-publish
+      cancel-in-progress: false
+    environment: ${{ matrix.environment }}
+    env:
+      DEPLOYMENT_ENVIRONMENT: ${{ matrix.environment }}
+      DEPLOYMENT_CONFIG: ${{ matrix.config }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check deployment settings
+        env:
+          DEPLOY_ROLE: ${{ vars.AWS_ROLE_ARN }}
+          DEPLOY_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          test -n "$DEPLOY_ROLE" || { echo 'Set environment variable AWS_ROLE_ARN'; exit 1; }
+          test -n "$DEPLOY_REGION" || { echo 'Set environment variable AWS_REGION'; exit 1; }
+
+      - name: Test deployment configuration
+        run: python -m unittest discover -s tests -v
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Package tagged project and publish selection
+        run: python scripts/publish_dataflow.py "$DEPLOYMENT_CONFIG"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.environment }}-release-selection
+          path: ${{ runner.temp }}/dataflow-publish/deployment.json

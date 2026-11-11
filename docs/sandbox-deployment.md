@@ -1,20 +1,36 @@
-# Sandbox release publishing
+# Dataflow release publishing
 
 This workflow publishes the selected tagged dbt project to S3. It does not yet
 execute dbt or change Redshift views. Existing release tags are not modified.
 
 ## One-time setup
 
-1. Create the GitHub Environment `sandbox` in repository Settings > Environments.
-2. Set environment variables `AWS_ROLE_ARN` and `AWS_REGION`.
+1. Use the existing GitHub Environment `internal-workload-data-666`.
+2. Set environment variables `AWS_ROLE_ARN` and `AWS_REGION` on that
+   environment.
 3. Cloud provisions the AWS role and GitHub OIDC trust for this repository's
-   `sandbox` environment, using the subject format issued for this repository.
+   `internal-workload-data-666` environment, using the subject format issued
+   for this repository.
    The role needs `s3:PutObject` and `s3:GetObject` on
    `arn:aws:s3:::exerp-data-666-dataflow-airflow/dbt_project/*`.
    Add KMS permissions if required by the bucket encryption policy.
-4. Merge this change to `main` and open Actions > Publish Dataflow sandbox release
-   > Run workflow, selecting `main`. Alternatively, changing
-   `deployments/sandbox.json` on `main` triggers publishing automatically.
+4. Merge this change to `main` and open Actions > Publish Dataflow release > Run
+   workflow, selecting `main` and entering `internal-workload-data-666` as the
+   deployment. Alternatively, changing any `deployments/*.json` file on `main`
+   triggers publishing for each changed deployment file.
+
+The bucket is derived rather than configured: the portion after
+`internal-workload-` in the deployment filename is the system name. Therefore,
+`internal-workload-data-666.json` publishes to
+`exerp-data-666-dataflow-airflow`. This avoids a deployment file pointing at a
+bucket belonging to another system. S3 objects always use the fixed
+`dbt_project` prefix.
+
+Each deployment filename selects its matching GitHub Environment, and its
+`release` field selects the version published there. If several deployment files
+change in one push, the workflow publishes them independently using matrix jobs.
+The discovery job verifies that every selected environment already exists before
+the publishing jobs reference it.
 
 ## Files in S3
 
@@ -53,8 +69,9 @@ publishing step. Do not interpret S3 upload or pointer update as deployment succ
 
 ## Upgrade or rollback
 
-Change `release` in `deployments/sandbox.json` through a PR. Publishing reads the
-configuration and scripts from the workflow checkout on `main`, and the dbt code
-from the selected Git tag. Retain referenced archives while an MWAA run may use
-them. Rolling back views requires an explicit MWAA run with the previous release;
-views absent from that previous release require separately reviewed cleanup.
+Change `release` in `deployments/internal-workload-data-666.json` through a PR.
+Publishing reads the configuration and scripts from the workflow checkout on
+`main`, and the dbt code from the selected Git tag. Retain referenced archives
+while an MWAA run may use them. Rolling back views requires an explicit MWAA run
+with the previous release; views absent from that previous release require
+separately reviewed cleanup.
