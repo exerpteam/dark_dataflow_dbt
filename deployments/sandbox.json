@@ -1,6 +1,0 @@
-{
-  "release": "pre-alpha-vdummy",
-  "project_path": "exerp-dbt",
-  "bucket": "exerp-data-666-dataflow-airflow",
-  "prefix": "dbt_project"
-}
