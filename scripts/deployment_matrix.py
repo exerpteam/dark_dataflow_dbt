@@ -21,13 +21,15 @@ def main():
         ):
             raise ValueError(f'Invalid deployment config path: {value}')
 
-        environment, _ = deployment_target(config_path)
+        environment, bucket = deployment_target(config_path)
         if environment in seen:
             continue
         seen.add(environment)
         deployments.append({
             'environment': environment,
             'config': config_path.as_posix(),
+            'bucket': bucket,
+            'mwaa_environment': bucket.removeprefix('exerp-'),
         })
 
     print(f'matrix={json.dumps({"include": deployments}, separators=(",", ":"))}')
