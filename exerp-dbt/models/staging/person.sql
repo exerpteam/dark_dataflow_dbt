@@ -88,7 +88,8 @@ with person as (
         "state" as "state",
         "national_id" as "national_id",
         "resident_id" as "resident_id",
-        "replicated_at" as "replicated_at"
+        "replicated_at" as "replicated_at",
+        NULL as "dummy_column"
     from {{ source('zeroetl', 'persons') }} as _source_row
     left join (
         select "id" as "_center_id", "time_zone" as "_time_zone"
