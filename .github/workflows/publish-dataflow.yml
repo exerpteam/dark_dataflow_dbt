@@ -73,6 +73,8 @@ jobs:
     env:
       DEPLOYMENT_ENVIRONMENT: ${{ matrix.environment }}
       DEPLOYMENT_CONFIG: ${{ matrix.config }}
+      RELEASE_BUCKET: ${{ matrix.bucket }}
+      MWAA_ENVIRONMENT: ${{ matrix.mwaa_environment }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -97,6 +99,28 @@ jobs:
 
       - name: Package tagged project and publish selection
         run: python scripts/publish_dataflow.py "$DEPLOYMENT_CONFIG"
+
+      - name: Trigger MWAA release DAG
+        shell: bash
+        env:
+          DAG_ID: dataflow_auto_release
+        run: |
+          dag_run_id="github__${GITHUB_RUN_ID}__${GITHUB_RUN_ATTEMPT}"
+          body=$(jq -cn \
+            --arg dag_run_id "$dag_run_id" \
+            --arg bucket "$RELEASE_BUCKET" \
+            --arg deployment "$DEPLOYMENT_ENVIRONMENT" \
+            '{dag_run_id: $dag_run_id, logical_date: null, conf: {deployment: $deployment, bucket: $bucket, key: "dbt_project/deployment.json"}}')
+          response=$(aws mwaa invoke-rest-api \
+            --name "$MWAA_ENVIRONMENT" \
+            --path "/dags/$DAG_ID/dagRuns" \
+            --method POST \
+            --body "$body")
+          status=$(jq -r '.RestApiStatusCode' <<< "$response")
+          test "$status" = "200" || {
+            echo "MWAA rejected DAG trigger with HTTP status $status"
+            exit 1
+          }
 
       - uses: actions/upload-artifact@v4
         with:
