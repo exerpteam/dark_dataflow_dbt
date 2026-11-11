@@ -71,5 +71,7 @@ DAG and its environment configuration.
 ## Rollback
 
 Set `release` to a previously published tag and publish the deployment again.
-Run the Airflow deployment explicitly; objects absent from the older release may
+The workflow reuses the matching immutable archive, updates `deployment.json`,
+and triggers MWAA without uploading the archive again. An existing archive with
+different contents is rejected. Objects absent from the older release may
 require separately reviewed cleanup.

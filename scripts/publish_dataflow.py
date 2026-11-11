@@ -85,6 +85,94 @@ def resolve_tag(release):
         raise ValueError(f'Release tag does not exist: {release}') from error
 
 
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def normalized_tar(tar_bytes):
+    """Normalize tar ownership and timestamps for reproducible archives."""
+    source_buffer = io.BytesIO(tar_bytes)
+    output_buffer = io.BytesIO()
+    with tarfile.open(fileobj=source_buffer, mode='r:') as source:
+        with tarfile.open(fileobj=output_buffer, mode='w:') as output:
+            for member in source.getmembers():
+                member.mtime = 0
+                member.uid = 0
+                member.gid = 0
+                member.uname = ''
+                member.gname = ''
+                content = source.extractfile(member) if member.isfile() else None
+                output.addfile(member, content)
+    return output_buffer.getvalue()
+
+
+def archive_manifest(path):
+    """Describe archive contents without considering tar metadata."""
+    manifest = []
+    with tarfile.open(path, 'r:gz') as archive:
+        for member in archive.getmembers():
+            if member.isdir():
+                manifest.append((member.name, 'directory', 0, None))
+            elif member.isfile():
+                digest = hashlib.sha256()
+                with archive.extractfile(member) as source:
+                    for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                        digest.update(chunk)
+                manifest.append((member.name, 'file', member.size, digest.hexdigest()))
+            else:
+                manifest.append((member.name, member.type, member.size, None))
+    return manifest
+
+
+def existing_release_checksum(bucket, key, artifact, commit, checksum):
+    """Return the canonical checksum of an existing matching release."""
+    head = subprocess.run([
+        'aws', 's3api', 'head-object', '--bucket', bucket, '--key', key,
+    ], capture_output=True, text=True)
+    if head.returncode:
+        if any(code in head.stderr for code in ('404', 'NoSuchKey', 'Not Found')):
+            return None
+        raise RuntimeError(head.stderr)
+
+    metadata = json.loads(head.stdout).get('Metadata', {})
+    existing_commit = metadata.get('commit')
+    existing_checksum = metadata.get('sha256')
+    if existing_commit and existing_commit != commit:
+        raise RuntimeError(
+            'Release already exists for a different commit; create a new tag'
+        )
+    if existing_commit == commit and existing_checksum:
+        if not re.fullmatch(r'[0-9a-f]{64}', existing_checksum):
+            raise RuntimeError('Existing release has invalid checksum metadata')
+        return existing_checksum
+
+    # Support releases created before complete metadata was added. Compare the
+    # actual project files, ignoring nondeterministic metadata in older tar files.
+    existing_artifact = artifact.with_name(f'existing-{artifact.name}')
+    existing_artifact.unlink(missing_ok=True)
+    get = subprocess.run([
+        'aws', 's3api', 'get-object', '--bucket', bucket, '--key', key,
+        str(existing_artifact),
+    ], capture_output=True, text=True)
+    if get.returncode:
+        raise RuntimeError(get.stderr)
+    try:
+        actual_checksum = file_sha256(existing_artifact)
+        if existing_checksum and existing_checksum != actual_checksum:
+            raise RuntimeError('Existing release checksum metadata is incorrect')
+        if archive_manifest(existing_artifact) != archive_manifest(artifact):
+            raise RuntimeError(
+                'Release already exists with different contents; create a new tag'
+            )
+    finally:
+        existing_artifact.unlink(missing_ok=True)
+    return actual_checksum
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit(f'Usage: {Path(sys.argv[0]).name} DEPLOYMENT_CONFIG.json')
@@ -108,28 +196,34 @@ def main():
     tar_bytes = command('git', 'archive', '--format=tar', tree)
     with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as archive:
         archive.getmember('dbt_project.yml')
-    # Fixed gzip timestamp makes retries produce the same checksum.
-    payload = gzip.compress(tar_bytes, mtime=0)
+    # Normalize both tar and gzip metadata so retries produce the same checksum.
+    payload = gzip.compress(normalized_tar(tar_bytes), mtime=0)
     checksum = hashlib.sha256(payload).hexdigest()
     output = Path(os.environ.get('RUNNER_TEMP', '/tmp')) / 'dataflow-publish'
     output.mkdir(parents=True, exist_ok=True)
     artifact = output / f'exerp-dbt-{release}.tar.gz'
     artifact.write_bytes(payload)
     key = f'{S3_PREFIX}/releases/{artifact.name}'
+    # The conditional write is an atomic existence check and does not require
+    # bucket-list permission. Existing immutable releases are validated below.
+    reused = False
     put = subprocess.run([
         'aws', 's3api', 'put-object', '--bucket', bucket, '--key', key,
         '--body', str(artifact), '--if-none-match', '*',
         '--metadata', f'commit={commit},sha256={checksum}',
     ], capture_output=True, text=True)
     if put.returncode:
-        if 'PreconditionFailed' not in put.stderr:
+        if not any(
+            code in put.stderr for code in ('412', 'PreconditionFailed')
+        ):
             raise RuntimeError(put.stderr)
-        existing = json.loads(command(
-            'aws', 's3api', 'head-object', '--bucket', bucket, '--key', key
-        ))
-        metadata = existing.get('Metadata', {})
-        if metadata.get('commit') != commit or metadata.get('sha256') != checksum:
-            raise RuntimeError('Release already exists with different contents; create a new tag')
+        existing_checksum = existing_release_checksum(
+            bucket, key, artifact, commit, checksum
+        )
+        if not existing_checksum:
+            raise RuntimeError('Existing release disappeared during validation')
+        checksum = existing_checksum
+        reused = True
     pointer = {
         'deployment': deployment_name,
         'release': release,
@@ -144,7 +238,8 @@ def main():
     command('aws', 's3api', 'put-object', '--bucket', bucket,
             '--key', f'{S3_PREFIX}/deployment.json', '--body', str(pointer_file),
             '--content-type', 'application/json')
-    print(f'Published {release} ({commit}) to s3://{bucket}/{key}')
+    verb = 'Reused' if reused else 'Published'
+    print(f'{verb} {release} ({commit}) at s3://{bucket}/{key}')
     print('Selection updated; Redshift deployment requires a successful MWAA run.')
 
 
