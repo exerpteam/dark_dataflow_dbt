@@ -11,11 +11,11 @@ from unittest.mock import patch
 
 from scripts.publish_dataflow import (
     EXPECTED_CONFIG_FIELDS,
+    deployment_target,
     existing_release_checksum,
     load_deployment_config,
     normalized_tar,
     resolve_tag,
-    validate_environment,
 )
 
 
@@ -23,15 +23,17 @@ class DeploymentConfigurationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.config_path = Path(os.environ['DEPLOYMENT_CONFIG'])
-        cls.environment = os.environ['DEPLOYMENT_ENVIRONMENT']
         cls.config = load_deployment_config(cls.config_path)
 
-    def test_deployment_matches_github_environment(self):
-        deployment, _ = validate_environment(
-            self.config_path, self.environment
-        )
+    def test_deployment_target_is_derived_from_filename(self):
+        deployment, bucket = deployment_target(self.config_path)
 
-        self.assertEqual(deployment, self.environment)
+        self.assertEqual(deployment, self.config_path.stem)
+        self.assertEqual(
+            bucket,
+            f'exerp-{deployment.removeprefix("internal-workload-")}'
+            '-dataflow-airflow',
+        )
 
     def test_all_configuration_fields_are_given(self):
         self.assertEqual(set(self.config), EXPECTED_CONFIG_FIELDS)

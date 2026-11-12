@@ -15,7 +15,14 @@ DEPLOYMENT_NAME_PATTERN = re.compile(
     r'internal-workload-(?P<system_name>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)'
 )
 S3_PREFIX = 'dbt_project'
-EXPECTED_CONFIG_FIELDS = {'release', 'project_path'}
+EXPECTED_CONFIG_FIELDS = {
+    'release', 'project_path', 'aws_region', 'aws_role_arn'
+}
+AWS_REGION = re.compile(r'[a-z]{2}(?:-gov)?-[a-z]+-\d')
+AWS_ROLE_ARN = re.compile(
+    r'arn:(?P<partition>aws(?:-us-gov|-cn)?):iam::(?P<account>\d{12}):'
+    r'role/(?P<role>[A-Za-z0-9+=,.@_/-]{1,512})'
+)
 
 
 def deployment_target(config_path):
@@ -50,6 +57,8 @@ def load_deployment_config(config_path):
         )
     release = config['release']
     project = config['project_path']
+    region = config['aws_region']
+    role_arn = config['aws_role_arn']
     if not isinstance(release, str) or not re.fullmatch(
         r'[A-Za-z0-9][A-Za-z0-9._-]*', release
     ):
@@ -58,20 +67,11 @@ def load_deployment_config(config_path):
         r'[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*', project
     ):
         raise ValueError('Invalid project path')
+    if not isinstance(region, str) or not AWS_REGION.fullmatch(region):
+        raise ValueError('Invalid AWS region')
+    if not isinstance(role_arn, str) or not AWS_ROLE_ARN.fullmatch(role_arn):
+        raise ValueError('Invalid AWS role ARN')
     return config
-
-
-def validate_environment(config_path, environment):
-    """Ensure the selected GitHub Environment owns this deployment file."""
-    if not environment:
-        raise ValueError('DEPLOYMENT_ENVIRONMENT is not set')
-    deployment_name, bucket = deployment_target(config_path)
-    if deployment_name != environment:
-        raise ValueError(
-            f'Deployment {deployment_name!r} does not match GitHub '
-            f'Environment {environment!r}'
-        )
-    return deployment_name, bucket
 
 
 def resolve_tag(release):
@@ -178,9 +178,7 @@ def main():
         raise SystemExit(f'Usage: {Path(sys.argv[0]).name} DEPLOYMENT_CONFIG.json')
     config_path = Path(sys.argv[1])
     config = load_deployment_config(config_path)
-    deployment_name, bucket = validate_environment(
-        config_path, os.environ.get('DEPLOYMENT_ENVIRONMENT')
-    )
+    deployment_name, bucket = deployment_target(config_path)
     release = config['release']
     project = config['project_path']
     commit = resolve_tag(release)

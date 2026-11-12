@@ -1,11 +1,10 @@
 # Dataflow deployment
 
-The workflow publishes a tagged dbt project to the S3 bucket associated with a
-GitHub Environment. Publishing does not run dbt or update Redshift.
+GitHub publishes a tagged dbt project to S3, then triggers its MWAA release DAG.
 
-## Deployment contract
+## Configuration
 
-Create one file per environment:
+Create one file per target:
 
 ```text
 deployments/internal-workload-<system>.json
@@ -14,64 +13,44 @@ deployments/internal-workload-<system>.json
 ```json
 {
   "release": "<existing-git-tag>",
-  "project_path": "exerp-dbt"
+  "project_path": "exerp-dbt",
+  "aws_region": "<aws-region>",
+  "aws_role_arn": "<github-deployment-role-arn>"
 }
 ```
 
-The filename controls the deployment target:
+The filename derives:
 
-| Derived value | Format |
+| Resource | Value |
 | --- | --- |
-| GitHub Environment | `internal-workload-<system>` |
+| Deployment | `internal-workload-<system>` |
 | S3 bucket | `exerp-<system>-dataflow-airflow` |
-| S3 prefix | `dbt_project` |
+| MWAA environment | `<system>-dataflow-airflow` |
 
-The GitHub Environment must already exist. Configure these environment
-variables:
-
-- `AWS_ROLE_ARN`
-- `AWS_REGION`
-
-The AWS role needs GitHub OIDC trust plus `s3:GetObject` and `s3:PutObject` for
-`arn:aws:s3:::exerp-<system>-dataflow-airflow/dbt_project/*`. Add KMS permissions
-when the bucket uses a customer-managed key. It also needs
-`airflow:InvokeRestApi` for the matching MWAA environment's Airflow role so the
-workflow can start the release DAG after publishing.
+The region and role ARN are non-secret. No matching GitHub Environment or AWS
+keys in GitHub are required.
 
 ## Publish
 
-- Merge a deployment JSON change to `main` to publish automatically.
-- For a manual run, open **Actions > Publish Dataflow release**, select `main`,
-  and enter the deployment name without `deployments/` or `.json`.
-- A push changing multiple deployment files creates one independent job per
-  environment.
+- Automatic: merge a deployment JSON change to `main`.
+- Manual: run **Publish Dataflow release** on `main` and enter the deployment
+  name without its path or `.json` suffix.
 
-Before publishing, the workflow verifies that the environment exists, all JSON
-fields are present, and the release tag resolves to a commit. After publishing,
-it triggers the matching MWAA release DAG directly.
-
-## S3 output
+The workflow validates every field and the Git tag before publishing:
 
 ```text
 dbt_project/releases/exerp-dbt-<release>.tar.gz
 dbt_project/deployment.json
 ```
 
-Release archives are immutable. `deployment.json` is updated only after the
-archive upload succeeds and contains the selected environment, release, commit,
-artifact key, bucket, and checksum.
-
-The Airflow consumer must read the pointer once per run, verify the checksum,
-extract into an isolated writable directory, and supply runtime dbt credentials.
-An S3 publish is not proof that dbt completed successfully.
-
-See [Automatic MWAA releases](automatic-release-dag.md) for the scheduled release
-DAG and its environment configuration.
+Release archives are immutable. The pointer is updated only after the archive
+is available, then GitHub triggers MWAA.
 
 ## Rollback
 
-Set `release` to a previously published tag and publish the deployment again.
-The workflow reuses the matching immutable archive, updates `deployment.json`,
-and triggers MWAA without uploading the archive again. An existing archive with
-different contents is rejected. Objects absent from the older release may
-require separately reviewed cleanup.
+Change `release` to an older published tag. The workflow reuses the archive,
+updates the pointer, and triggers MWAA. It rejects an archive whose contents do
+not match the tag.
+
+See [Automatic MWAA releases](automatic-release-dag.md) and
+[GitHub to AWS access](cloud-access-overview.md).

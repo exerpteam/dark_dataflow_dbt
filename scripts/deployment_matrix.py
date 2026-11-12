@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import sys
 
-from publish_dataflow import deployment_target
+from publish_dataflow import deployment_target, load_deployment_config
 
 
 def main():
@@ -21,15 +21,18 @@ def main():
         ):
             raise ValueError(f'Invalid deployment config path: {value}')
 
-        environment, bucket = deployment_target(config_path)
-        if environment in seen:
+        deployment, bucket = deployment_target(config_path)
+        config = load_deployment_config(config_path)
+        if deployment in seen:
             continue
-        seen.add(environment)
+        seen.add(deployment)
         deployments.append({
-            'environment': environment,
+            'deployment': deployment,
             'config': config_path.as_posix(),
             'bucket': bucket,
             'mwaa_environment': bucket.removeprefix('exerp-'),
+            'aws_region': config['aws_region'],
+            'aws_role_arn': config['aws_role_arn'],
         })
 
     print(f'matrix={json.dumps({"include": deployments}, separators=(",", ":"))}')
