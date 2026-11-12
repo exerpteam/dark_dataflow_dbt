@@ -12,12 +12,25 @@ to create a temporary state manifest. It does not change `dataflow_auto_release`
 or write a persistent baseline. Each PR writes to `ci_pr_<number>` and runs:
 
 ```text
+dbt run-operation reset_ci_schema
 dbt build --select state:modified+ --state <baseline> --defer
 dbt run-operation query_ci_views
 ```
 
-The query operation reads `svv_all_views`, so late-binding views are included.
-Run artifacts are saved below `dbt_project/ci/pr-<number>/<commit>/results/`.
+Every run first drops the PR schema with `DROP SCHEMA IF EXISTS ... CASCADE`
+and recreates it. This means a new commit on the same PR cannot inherit stale
+views or other objects from an earlier CI attempt. The reset macro refuses to
+operate unless the target schema name exactly matches `ci_pr_<number>`.
+
+After the build, the DAG reads `run_results.json` and `manifest.json` to obtain
+the exact relations for models that dbt built successfully. It passes those
+fully qualified relations to the query operation, so late-binding views are
+supported without relying on Redshift catalog views. Run artifacts are saved
+below `dbt_project/ci/pr-<number>/<commit>/results/`.
+
+For compatibility with an older deployed CI DAG that does not pass the dbt
+artifact relations, the macro falls back to Redshift's
+`PG_GET_LATE_BINDING_VIEW_COLS()` function for the PR schema.
 
 ## How the comparison works
 
@@ -61,10 +74,12 @@ zeroetl.exerp.persons
 └── person_untouched
 ```
 
-After `pre-alpha-v3` is successfully applied, the CI test PR changes only
-`person`. `state:modified+` should build and test `person` and
-`person_by_center`. It should not select `person_untouched`. The CI query macro
-should consequently report two queried views in `ci_pr_<number>`.
+After `pre-alpha-v3` is successfully applied, the CI test PR changes `person`
+by adding a derived column and introduces `person_ci_sample`, which depends on
+`person`. `state:modified+` should build and test `person`, the existing
+downstream `person_by_center`, and the new `person_ci_sample`. It should not
+select `person_untouched`. The CI query macro should consequently report three
+queried views in `ci_pr_<number>`.
 
 ## Setup
 
