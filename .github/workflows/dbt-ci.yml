@@ -1,0 +1,139 @@
+name: dbt Slim CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - exerp-dbt/**
+      - dags/dataflow_dbt_ci.py
+      - .github/workflows/dbt-ci.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: dbt-ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  slim-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    env:
+      DEPLOYMENT_CONFIG: ${{ vars.DATAFLOW_CI_DEPLOYMENT_CONFIG || 'deployments/internal-workload-data-666.json' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve test environment
+        id: environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$DEPLOYMENT_CONFIG"
+          deployment=$(basename "$DEPLOYMENT_CONFIG" .json)
+          system=${deployment#internal-workload-}
+          test "$system" != "$deployment"
+          echo "deployment=$deployment" >> "$GITHUB_OUTPUT"
+          echo "bucket=exerp-${system}-dataflow-airflow" >> "$GITHUB_OUTPUT"
+          echo "mwaa=${system}-dataflow-airflow" >> "$GITHUB_OUTPUT"
+          echo "region=$(jq -r '.aws_region' "$DEPLOYMENT_CONFIG")" >> "$GITHUB_OUTPUT"
+          echo "role=$(jq -r '.aws_role_arn' "$DEPLOYMENT_CONFIG")" >> "$GITHUB_OUTPUT"
+
+      - name: Package exact PR commit
+        id: artifact
+        shell: bash
+        env:
+          COMMIT: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+          stage="$RUNNER_TEMP/dbt-ci-project"
+          mkdir -p "$stage"
+          cp -a exerp-dbt/. "$stage/"
+          tar -C "$stage" --sort=name --mtime='@0' --owner=0 --group=0 \
+            --numeric-owner -cf - . | gzip -n > "$RUNNER_TEMP/project.tar.gz"
+          checksum=$(sha256sum "$RUNNER_TEMP/project.tar.gz" | cut -d' ' -f1)
+          key="dbt_project/ci/pr-${PR_NUMBER}/${COMMIT}/project.tar.gz"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.environment.outputs.role }}
+          aws-region: ${{ steps.environment.outputs.region }}
+
+      - name: Upload immutable PR project
+        shell: bash
+        env:
+          BUCKET: ${{ steps.environment.outputs.bucket }}
+          KEY: ${{ steps.artifact.outputs.key }}
+          CHECKSUM: ${{ steps.artifact.outputs.checksum }}
+          COMMIT: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if aws s3api put-object --bucket "$BUCKET" --key "$KEY" \
+            --body "$RUNNER_TEMP/project.tar.gz" \
+            --metadata "commit=$COMMIT,sha256=$CHECKSUM" \
+            --if-none-match '*'; then
+            exit 0
+          fi
+          metadata=$(aws s3api head-object --bucket "$BUCKET" --key "$KEY")
+          test "$(jq -r '.Metadata.commit' <<< "$metadata")" = "$COMMIT"
+          test "$(jq -r '.Metadata.sha256' <<< "$metadata")" = "$CHECKSUM"
+
+      - name: Trigger MWAA dbt CI
+        id: trigger
+        shell: bash
+        env:
+          DEPLOYMENT: ${{ steps.environment.outputs.deployment }}
+          BUCKET: ${{ steps.environment.outputs.bucket }}
+          MWAA: ${{ steps.environment.outputs.mwaa }}
+          KEY: ${{ steps.artifact.outputs.key }}
+          CHECKSUM: ${{ steps.artifact.outputs.checksum }}
+          COMMIT: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          run_id="github_pr_${PR_NUMBER}__${GITHUB_RUN_ID}__${GITHUB_RUN_ATTEMPT}"
+          conf=$(jq -cn \
+            --arg deployment "$DEPLOYMENT" --arg bucket "$BUCKET" \
+            --arg commit "$COMMIT" --arg key "$KEY" \
+            --arg checksum "$CHECKSUM" --argjson pr "$PR_NUMBER" \
+            '{deployment:$deployment,bucket:$bucket,pr_number:$pr,
+              commit_sha:$commit,artifact_key:$key,artifact_sha256:$checksum}')
+          body=$(jq -cn --arg run "$run_id" --argjson conf "$conf" \
+            '{dag_run_id:$run,logical_date:null,conf:$conf}')
+          response=$(aws mwaa invoke-rest-api --name "$MWAA" \
+            --path '/dags/dataflow_dbt_ci/dagRuns' --method POST --body "$body")
+          test "$(jq -r '.RestApiStatusCode' <<< "$response")" = "200"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for MWAA result
+        shell: bash
+        env:
+          MWAA: ${{ steps.environment.outputs.mwaa }}
+          RUN_ID: ${{ steps.trigger.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 360); do
+            response=$(aws mwaa invoke-rest-api --name "$MWAA" \
+              --path "/dags/dataflow_dbt_ci/dagRuns/${RUN_ID}" --method GET)
+            test "$(jq -r '.RestApiStatusCode' <<< "$response")" = "200"
+            state=$(jq -r \
+              '.RestApiResponse | if type == "string" then fromjson else . end | .state' \
+              <<< "$response")
+            echo "MWAA run state: $state"
+            case "$state" in
+              success) exit 0 ;;
+              failed) exit 1 ;;
+            esac
+            sleep 20
+          done
+          echo 'Timed out waiting for MWAA' >&2
+          exit 1
