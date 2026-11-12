@@ -4,7 +4,7 @@ config-version: 2
 
 profile: dataflow
 
-model-paths: ["models"]
+model-paths: ["models/release_test"]
 test-paths: ["tests"]
 seed-paths: ["seeds"]
 macro-paths: ["macros"]
@@ -17,5 +17,5 @@ clean-targets:
 
 models:
   exerp_dbt:
-    staging:
+    release_test:
       +materialized: view

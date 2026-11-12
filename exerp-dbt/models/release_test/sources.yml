@@ -1,0 +1,8 @@
+version: 2
+
+sources:
+  - name: zeroetl
+    database: zeroetl
+    schema: exerp
+    tables:
+      - name: persons

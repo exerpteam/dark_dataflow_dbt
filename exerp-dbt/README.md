@@ -1,6 +1,14 @@
 # Exerp dbt project
 
-This directory contains dbt staging models for Exerp using Amazon Redshift. Models are materialized as views in the target database and schema configured by the profile. For example, the `person` model reads the `persons` table through the `zeroetl` external schema.
+> **Release-flow fixture:** this branch intentionally limits `model-paths` to
+> `models/release_test`. The fixture contains one late-binding `person` view
+> over the confirmed `zeroetl.exerp.persons` source and no data tests. The full
+> staging inventory remains under `models/staging`, but dbt does not parse or
+> build it. This keeps `dbt build` deterministic while the S3/MWAA release flow
+> is being tested.
+
+The active fixture contains one model materialized as a Redshift view. The
+`person` model reads the `persons` table through the `zeroetl` external schema.
 
 ## Set up
 
@@ -36,20 +44,21 @@ This directory contains dbt staging models for Exerp using Amazon Redshift. Mode
 
    ```sh
    dbt debug
-   dbt run
+   dbt build
    ```
 
 The example profile uses environment variables so database credentials stay outside the repository. Keep your local `~/.dbt/profiles.yml` private.
 
-## Epoch date and time fields
-
-Some source columns are stored as bigint epoch milliseconds even though they represent dates or instants. The source column metadata marks these with `semantic_type: epoch_milliseconds_timestamp` or `semantic_type: epoch_milliseconds_date`. Staging models use the macros in `macros/exerp_time_conversions.sql` to convert those values while retaining the existing output column names.
-
-Instants use the related center's `time_zone` when the source row provides a center key. Scoped rows use a center only when `scope_type = 'C'`. Global records without a center relationship are converted in UTC. Calendar-date fields are converted to `DATE` in UTC and are not shifted to a local time zone. Other bigint values, including IDs, counters, versions, and durations, remain numeric.
-
 ## Project contents
 
-- `models/staging/exerp.sql`: the initial staging model.
-- `models/staging/sources.yml`: declaration of the upstream source table.
-- `analyses/sample_query.sql`: a sample query using the staging model; compile it with `dbt compile`.
-- `dbt_project.yml`: project settings and default staging materialization.
+- `models/release_test/person.sql`: the only active model.
+- `models/release_test/sources.yml`: the minimal upstream source declaration.
+- `models/staging/`: retained inventory, excluded from this fixture.
+- `dbt_project.yml`: limits discovery to `models/release_test`.
+
+## Publish this fixture
+
+The data-666 deployment selects the `pre-alpha-v2` tag. After committing these
+fixture changes, create that tag on the same commit and push both refs. The
+release publisher always packages the tag rather than uncommitted or untagged
+branch contents.
