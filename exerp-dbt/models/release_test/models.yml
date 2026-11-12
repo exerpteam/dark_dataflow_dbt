@@ -13,6 +13,9 @@ models:
       - name: fixture_version
         data_tests:
           - not_null
+      - name: fixture_person_key
+        data_tests:
+          - not_null
 
   - name: person_by_center
     description: Downstream model that must be selected when person changes.
@@ -32,5 +35,18 @@ models:
         data_tests:
           - not_null
       - name: id
+        data_tests:
+          - not_null
+
+  - name: person_ci_sample
+    description: New model introduced by the Slim CI test PR.
+    columns:
+      - name: center
+        data_tests:
+          - not_null
+      - name: id
+        data_tests:
+          - not_null
+      - name: fixture_person_key
         data_tests:
           - not_null

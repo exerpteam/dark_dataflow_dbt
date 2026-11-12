@@ -61,10 +61,12 @@ zeroetl.exerp.persons
 └── person_untouched
 ```
 
-After `pre-alpha-v3` is successfully applied, the CI test PR changes only
-`person`. `state:modified+` should build and test `person` and
-`person_by_center`. It should not select `person_untouched`. The CI query macro
-should consequently report two queried views in `ci_pr_<number>`.
+After `pre-alpha-v3` is successfully applied, the CI test PR changes `person`
+by adding a derived column and introduces `person_ci_sample`, which depends on
+`person`. `state:modified+` should build and test `person`, the existing
+downstream `person_by_center`, and the new `person_ci_sample`. It should not
+select `person_untouched`. The CI query macro should consequently report three
+queried views in `ci_pr_<number>`.
 
 ## Setup
 
