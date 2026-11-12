@@ -51,6 +51,21 @@ For this pre-POC, keeping test on the latest approved deployment and verifying
 that guarantee are operational prerequisites. Automating or enforcing them is
 out of scope. CI trusts the existing `applied.json` marker.
 
+## Fixture test scenario
+
+The `pre-alpha-v3` release fixture contains:
+
+```text
+zeroetl.exerp.persons
+├── person ──► person_by_center
+└── person_untouched
+```
+
+After `pre-alpha-v3` is successfully applied, the CI test PR changes only
+`person`. `state:modified+` should build and test `person` and
+`person_by_center`. It should not select `person_untouched`. The CI query macro
+should consequently report two queried views in `ci_pr_<number>`.
+
 ## Setup
 
 Deploy `dags/dataflow_dbt_ci.py` to MWAA. A successful normal release must

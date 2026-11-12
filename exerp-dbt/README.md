@@ -1,14 +1,15 @@
 # Exerp dbt project
 
 > **Release-flow fixture:** this branch intentionally limits `model-paths` to
-> `models/release_test`. The fixture contains one late-binding `person` view
-> over the confirmed `zeroetl.exerp.persons` source and no data tests. The full
+> `models/release_test`. The fixture contains three late-binding views over the
+> confirmed `zeroetl.exerp.persons` source and a small set of built-in tests. The full
 > staging inventory remains under `models/staging`, but dbt does not parse or
 > build it. This keeps `dbt build` deterministic while the S3/MWAA release flow
 > is being tested.
 
-The active fixture contains one model materialized as a Redshift view. The
-`person` model reads the `persons` table through the `zeroetl` external schema.
+The active fixture has a dependency path from `person` to `person_by_center`
+plus an independent `person_untouched` model. This allows Slim CI to prove that
+downstream models are selected while unrelated models are not.
 
 ## Set up
 
@@ -51,14 +52,17 @@ The example profile uses environment variables so database credentials stay outs
 
 ## Project contents
 
-- `models/release_test/person.sql`: the only active model.
+- `models/release_test/person.sql`: base model changed by the later CI test PR.
+- `models/release_test/person_by_center.sql`: downstream dependency.
+- `models/release_test/person_untouched.sql`: independent control model.
+- `models/release_test/models.yml`: basic not-null and unique tests.
 - `models/release_test/sources.yml`: the minimal upstream source declaration.
 - `models/staging/`: retained inventory, excluded from this fixture.
 - `dbt_project.yml`: limits discovery to `models/release_test`.
 
 ## Publish this fixture
 
-The data-666 deployment selects the `pre-alpha-v2` tag. After committing these
+The data-666 deployment selects the `pre-alpha-v3` tag. After committing these
 fixture changes, create that tag on the same commit and push both refs. The
 release publisher always packages the tag rather than uncommitted or untagged
 branch contents.

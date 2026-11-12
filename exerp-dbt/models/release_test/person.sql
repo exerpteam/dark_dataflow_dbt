@@ -2,5 +2,6 @@
 
 select
     "center",
-    "id"
+    "id",
+    cast('baseline-v3' as varchar(32)) as "fixture_version"
 from {{ source('zeroetl', 'persons') }}

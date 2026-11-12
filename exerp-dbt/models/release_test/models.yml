@@ -1,0 +1,36 @@
+version: 2
+
+models:
+  - name: person
+    description: Base model that will be changed in the Slim CI test PR.
+    columns:
+      - name: center
+        data_tests:
+          - not_null
+      - name: id
+        data_tests:
+          - not_null
+      - name: fixture_version
+        data_tests:
+          - not_null
+
+  - name: person_by_center
+    description: Downstream model that must be selected when person changes.
+    columns:
+      - name: center
+        data_tests:
+          - not_null
+          - unique
+      - name: person_count
+        data_tests:
+          - not_null
+
+  - name: person_untouched
+    description: Independent model that should not be selected by the test PR.
+    columns:
+      - name: center
+        data_tests:
+          - not_null
+      - name: id
+        data_tests:
+          - not_null
