@@ -30,6 +30,9 @@ Restrict the role trust to this repository's actual OIDC subject for `main`:
 repo:<organization>/<repository>:ref:refs/heads/main
 ```
 
+GitHub may include immutable owner and repository IDs in this value. The
+workflow prints its exact `OIDC subject` before assuming the role.
+
 Required permissions:
 
 - `s3:GetObject` and `s3:PutObject` on
