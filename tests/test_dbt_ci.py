@@ -96,6 +96,55 @@ class DbtCiContractTest(unittest.TestCase):
             self.module.extract_project(archive_path, project)
             self.assertEqual((project / 'dbt_project.yml').read_bytes(), b'name')
 
+    def test_only_successful_model_relations_are_query_checked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            target = project / 'target'
+            target.mkdir()
+            (target / 'run_results.json').write_text(json.dumps({
+                'results': [
+                    {'unique_id': 'model.exerp.person', 'status': 'success'},
+                    {'unique_id': 'test.exerp.not_null_person', 'status': 'pass'},
+                    {'unique_id': 'model.exerp.failed', 'status': 'error'},
+                ]
+            }), encoding='utf-8')
+            (target / 'manifest.json').write_text(json.dumps({
+                'nodes': {
+                    'model.exerp.person': {
+                        'resource_type': 'model',
+                        'relation_name': '"exerp"."ci_pr_7"."person"',
+                    },
+                    'test.exerp.not_null_person': {
+                        'resource_type': 'test',
+                    },
+                    'model.exerp.failed': {
+                        'resource_type': 'model',
+                        'relation_name': '"exerp"."ci_pr_7"."failed"',
+                    },
+                }
+            }), encoding='utf-8')
+            self.assertEqual(
+                self.module.successful_model_relations(project),
+                ['"exerp"."ci_pr_7"."person"'],
+            )
+
+    def test_ci_schema_is_reset_before_build(self):
+        dag_source = (ROOT / 'dags' / 'dataflow_dbt_ci.py').read_text(
+            encoding='utf-8'
+        )
+        reset = "project, 'ci', 'run-operation', 'reset_ci_schema'"
+        build = "project, 'ci', 'build', '--select', 'state:modified+'"
+        self.assertIn(reset, dag_source)
+        self.assertIn(build, dag_source)
+        self.assertLess(dag_source.index(reset), dag_source.index(build))
+
+        macro = (ROOT / 'exerp-dbt' / 'macros' / 'reset_ci_schema.sql').read_text(
+            encoding='utf-8'
+        )
+        self.assertIn("fullmatch('ci_pr_[0-9]+'", macro)
+        self.assertIn('drop schema if exists ', macro)
+        self.assertIn("create schema ", macro)
+
 
 class AppliedReleaseTest(unittest.TestCase):
     @classmethod
