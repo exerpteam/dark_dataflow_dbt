@@ -149,10 +149,37 @@ def get_applied_release(s3, config):
 
 
 def upload_results(s3, bucket, prefix, project):
-    for relative in ('target/manifest.json', 'target/run_results.json', 'logs/dbt.log'):
+    for relative in (
+        'target/manifest.json', 'target/run_results.json',
+        'target/query_run_results.json', 'logs/dbt.log',
+    ):
         path = project / relative
         if path.is_file():
             s3.upload_file(str(path), bucket, f'{prefix}/{relative}')
+
+
+def successful_model_relations(project):
+    """Return relations for models successfully built by the last dbt command."""
+    target = project / 'target'
+    run_results = json.loads(
+        (target / 'run_results.json').read_text(encoding='utf-8')
+    )
+    manifest = json.loads(
+        (target / 'manifest.json').read_text(encoding='utf-8')
+    )
+    relations = []
+    for result in run_results.get('results', []):
+        unique_id = result.get('unique_id')
+        node = manifest.get('nodes', {}).get(unique_id, {})
+        if (
+            result.get('status') == 'success'
+            and node.get('resource_type') == 'model'
+            and isinstance(node.get('relation_name'), str)
+        ):
+            relations.append(node['relation_name'])
+    if not relations:
+        raise RuntimeError('dbt build produced no successful model relations')
+    return sorted(set(relations))
 
 
 @dag(
@@ -298,10 +325,31 @@ def dataflow_dbt_ci():
                     dbt(project, 'ci', 'deps', timeout=600)
                 dbt(project, 'ci', 'debug', timeout=120)
                 dbt(
+                    project, 'ci', 'run-operation', 'reset_ci_schema',
+                    timeout=600,
+                )
+                dbt(
                     project, 'ci', 'build', '--select', 'state:modified+',
                     '--state', str(state), '--defer',
                 )
-                dbt(project, 'ci', 'run-operation', 'query_ci_views')
+                build_results_path = project / 'target' / 'run_results.json'
+                build_results = build_results_path.read_text(encoding='utf-8')
+                relations = successful_model_relations(project)
+                try:
+                    dbt(
+                        project, 'ci', 'run-operation', 'query_ci_views',
+                        '--args', json.dumps({'relations': relations}),
+                    )
+                finally:
+                    if build_results_path.is_file():
+                        query_results = project / 'target' / 'query_run_results.json'
+                        query_results.write_text(
+                            build_results_path.read_text(encoding='utf-8'),
+                            encoding='utf-8',
+                        )
+                    build_results_path.write_text(
+                        build_results, encoding='utf-8'
+                    )
             finally:
                 upload_results(
                     s3, config['bucket'], result_prefix, project
