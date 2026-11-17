@@ -89,5 +89,20 @@ The sandbox currently uses the existing admin-level Airflow connections:
 - `data_666_rds` for Core;
 - `dataflow_rds` for the subscriber.
 
-Stage 3 will narrow these permissions. The MWAA role needs read/write access
-under `logical_replication/` in the dataflow Airflow bucket.
+Stage 3 will narrow these permissions. Logical-replication artifacts and state
+use their own `logical_replication/` S3 prefix.
+
+The GitHub `github-dataflow-deploy` role needs:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": ["s3:GetObject", "s3:PutObject"],
+  "Resource": "arn:aws:s3:::exerp-data-666-dataflow-airflow/logical_replication/ci/*"
+}
+```
+
+The MWAA execution role needs `s3:GetObject` on
+`logical_replication/ci/*`, plus `s3:GetObject` and `s3:PutObject` on
+`logical_replication/applied.json`. Neither role needs `s3:ListBucket` for this
+flow. Existing KMS permissions must also cover the bucket's encryption key.

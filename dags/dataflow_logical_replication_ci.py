@@ -132,9 +132,11 @@ def validate_applied(applied, config):
     return applied
 
 
-def connection_env(connection, prefix):
+def connection_env(connection, prefix, connection_id):
+    if connection is None:
+        raise ValueError(f"Airflow connection {connection_id!r} was not found")
     if not all((connection.host, connection.login, connection.password)):
-        raise ValueError(f"Connection {connection.conn_id!r} is incomplete")
+        raise ValueError(f"Airflow connection {connection_id!r} is incomplete")
     return {
         f"{prefix}_HOST": connection.host,
         f"{prefix}_PORT": str(connection.port or 5432),
@@ -157,6 +159,7 @@ def dataflow_logical_replication_ci():
     @task(retries=0, execution_timeout=timedelta(hours=2))
     def apply_release():
         import boto3
+        from airflow.sdk.bases.hook import BaseHook
 
         context = get_current_context()
         config = trigger_config(context["dag_run"].conf)
@@ -203,10 +206,12 @@ def dataflow_logical_replication_ci():
 
             env = os.environ.copy()
             env.update(connection_env(
-                context["conn"].get(SOURCE_CONNECTION), "PUBLICATION_SOURCE"
+                BaseHook.get_connection(SOURCE_CONNECTION),
+                "PUBLICATION_SOURCE", SOURCE_CONNECTION,
             ))
             env.update(connection_env(
-                context["conn"].get(TARGET_CONNECTION), "PUBLICATION_TARGET"
+                BaseHook.get_connection(TARGET_CONNECTION),
+                "PUBLICATION_TARGET", TARGET_CONNECTION,
             ))
             subprocess.run(
                 [
