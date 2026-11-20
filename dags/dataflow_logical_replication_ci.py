@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 from airflow.sdk import dag, get_current_context, task
 
 
-SOURCE_CONNECTION = "data_666_rds"
+SOURCE_CONNECTION = "core_rds"
 TARGET_CONNECTION = "dataflow_rds"
 APPLIED_KEY = "logical_replication/applied.json"
 DEPLOYMENT = re.compile(
